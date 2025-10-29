@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Web3 Auth Tester</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 10px 0;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        .output {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 10px 0;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .success { color: green; }
+        .error { color: red; }
+    </style>
+</head>
+<body>
+    <h1>FinFlow Web3 Authentication Tester</h1>
+    
+    <div>
+        <h2>Step 1: Connect Wallet</h2>
+        <button onclick="connectWallet()">Connect MetaMask</button>
+        <div id="walletOutput" class="output"></div>
+    </div>
+
+    <div>
+        <h2>Step 2: Request Nonce</h2>
+        <button onclick="requestNonce()">Get Nonce</button>
+        <div id="nonceOutput" class="output"></div>
+    </div>
+
+    <div>
+        <h2>Step 3: Sign Message</h2>
+        <button onclick="signMessage()">Sign Message</button>
+        <div id="signOutput" class="output"></div>
+    </div>
+
+    <div>
+        <h2>Step 4: Verify & Login</h2>
+        <button onclick="verifySignature()">Verify Signature</button>
+        <div id="verifyOutput" class="output"></div>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:5000/api';
+        let walletAddress = null;
+        let nonce = null;
+        let message = null;
+        let signature = null;
+
+        async function connectWallet() {
+            try {
+                if (typeof window.ethereum === 'undefined') {
+                    document.getElementById('walletOutput').innerHTML = 
+                        '<span class="error">MetaMask is not installed!</span>';
+                    return;
+                }
+
+                const accounts = await window.ethereum.request({ 
+                    method: 'eth_requestAccounts' 
+                });
+                
+                walletAddress = accounts[0];
+                
+                document.getElementById('walletOutput').innerHTML = 
+                    `<span class="success">✓ Connected!</span>\nWallet Address: ${walletAddress}`;
+                
+                console.log('Wallet connected:', walletAddress);
+            } catch (error) {
+                document.getElementById('walletOutput').innerHTML = 
+                    `<span class="error">Error: ${error.message}</span>`;
+            }
+        }
+
+        async function requestNonce() {
+            try {
+                if (!walletAddress) {
+                    alert('Please connect wallet first!');
+                    return;
+                }
+
+                const response = await fetch(`${API_URL}/auth/wallet/nonce`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ walletAddress })
+                });
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    nonce = data.nonce;
+                    message = data.message;
+                    
+                    document.getElementById('nonceOutput').innerHTML = 
+                        `<span class="success">✓ Nonce received!</span>\nNonce: ${nonce}\nMessage: ${message}`;
+                    
+                    console.log('Nonce:', nonce);
+                } else {
+                    document.getElementById('nonceOutput').innerHTML = 
+                        `<span class="error">Error: ${data.error}</span>`;
+                }
+            } catch (error) {
+                document.getElementById('nonceOutput').innerHTML = 
+                    `<span class="error">Error: ${error.message}</span>`;
+            }
+        }
+
+        async function signMessage() {
+            try {
+                if (!message) {
+                    alert('Please request nonce first!');
+                    return;
+                }
+
+                signature = await window.ethereum.request({
+                    method: 'personal_sign',
+                    params: [message, walletAddress]
+                });
+
+                document.getElementById('signOutput').innerHTML = 
+                    `<span class="success">✓ Message signed!</span>\nSignature: ${signature}`;
+                
+                console.log('Signature:', signature);
+            } catch (error) {
+                document.getElementById('signOutput').innerHTML = 
+                    `<span class="error">Error: ${error.message}</span>`;
+            }
+        }
+
+        async function verifySignature() {
+            try {
+                if (!signature) {
+                    alert('Please sign message first!');
+                    return;
+                }
+
+                const response = await fetch(`${API_URL}/auth/wallet/verify`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        walletAddress,
+                        signature,
+                        walletType: 'metamask'
+                    })
+                });
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    document.getElementById('verifyOutput').innerHTML = 
+                        `<span class="success">✓ Authentication successful!</span>\n` +
+                        `Token: ${data.token}\n` +
+                        `User: ${JSON.stringify(data.user, null, 2)}`;
+                    
+                    console.log('Auth response:', data);
+                } else {
+                    document.getElementById('verifyOutput').innerHTML = 
+                        `<span class="error">Error: ${data.error}</span>`;
+                }
+            } catch (error) {
+                document.getElementById('verifyOutput').innerHTML = 
+                    `<span class="error">Error: ${error.message}</span>`;
+            }
+        }
+    </script>
+</body>
+</html>

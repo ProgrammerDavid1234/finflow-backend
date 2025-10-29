@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const userSchema = new mongoose.Schema({
     email: {
         type: String,
-        required: [true, 'Email is required'],
+        sparse: true, // Allow multiple null values
         unique: true,
         lowercase: true,
         trim: true,
@@ -11,8 +11,8 @@ const userSchema = new mongoose.Schema({
     },
     password: {
         type: String,
-        required: [true, 'Password is required'],
-        minlength: 6,
+        // Password is optional for Web3 wallet users
+        default: null,
     },
     fullName: {
         type: String,
@@ -42,9 +42,32 @@ const userSchema = new mongoose.Schema({
         type: Boolean,
         default: false,
     },
+    // Web3 Authentication Fields
     walletAddress: {
         type: String,
-        default: '',
+        sparse: true, // Allow multiple null values
+        unique: true,
+        trim: true,
+        lowercase: true,
+    },
+    walletType: {
+        type: String,
+        enum: ['metamask', 'walletconnect', 'none'],
+        default: 'none',
+    },
+    authMethod: {
+        type: String,
+        enum: ['email', 'wallet', 'hybrid'],
+        default: 'email',
+        required: true,
+    },
+    nonce: {
+        type: String,
+        default: () => Math.floor(Math.random() * 1000000).toString(),
+    },
+    hasPassword: {
+        type: Boolean,
+        default: false,
     },
     createdAt: {
         type: Date,
@@ -58,7 +81,18 @@ const userSchema = new mongoose.Schema({
     timestamps: true,
 });
 
-// Index for faster queries
+// Indexes for faster queries
 userSchema.index({ email: 1 });
+userSchema.index({ walletAddress: 1 });
+userSchema.index({ authMethod: 1 });
+
+// Validation: Either email or walletAddress must be present
+userSchema.pre('save', function(next) {
+    if (!this.email && !this.walletAddress) {
+        next(new Error('Either email or wallet address is required'));
+    } else {
+        next();
+    }
+});
 
 module.exports = mongoose.model('User', userSchema);
