@@ -3,18 +3,32 @@ const bcrypt = require('bcryptjs');
 const { validatePhoneNumber } = require('../utils/validators');
 
 // Get user profile
+// Get user profile
 exports.getProfile = async (req, res) => {
-    try {
-        const user = await User.findById(req.userId).select('-password');
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-        res.json({ success: true, user });
-    } catch (error) {
-        console.error('Get profile error:', error);
-        res.status(500).json({ error: 'Server error' });
+  try {
+    const user = await User.findById(req.userId).select('-password');
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
     }
+
+    // Format join date
+    const joinedMonthYear = user.createdAt
+      ? user.createdAt.toLocaleString('en-US', { month: 'long', year: 'numeric' })
+      : null;
+
+    res.json({
+      success: true,
+      user: {
+        ...user.toObject(),
+        joined: joinedMonthYear, // <-- add this to response
+      },
+    });
+  } catch (error) {
+    console.error('Get profile error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
 };
+
 
 // Update user profile
 exports.updateProfile = async (req, res) => {
