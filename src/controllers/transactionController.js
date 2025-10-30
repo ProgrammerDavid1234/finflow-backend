@@ -300,48 +300,66 @@ exports.getStatistics = async (req, res) => {
         res.status(500).json({ error: 'Server error' });
     }
 };
-// Add these exports to your transactionController.js file
-
-// Delete transaction with balance reversal
+// Delete single transaction
 exports.deleteTransaction = async (req, res) => {
     try {
+        const { force } = req.query; // Allow ?force=true to delete completed transactions
+        
+        console.log('Delete transaction called for ID:', req.params.id);
+        
         const transaction = await Transaction.findOne({
             _id: req.params.id,
             userId: req.userId,
         });
 
         if (!transaction) {
-            return res.status(404).json({ error: 'Transaction not found' });
+            return res.status(404).json({ 
+                success: false,
+                error: 'Transaction not found' 
+            });
         }
 
-        // Only allow deletion of pending or failed transactions to maintain data integrity
-        if (transaction.status === 'completed') {
+        console.log('Transaction found:', transaction._id, 'Status:', transaction.status);
+
+        // Block deletion of completed transactions unless force=true
+        if (transaction.status === 'completed' && force !== 'true') {
             return res.status(400).json({ 
-                error: 'Cannot delete completed transactions. Please contact support for reversals.' 
+                success: false,
+                error: 'Cannot delete completed transactions. Add ?force=true to override (WARNING: This affects balance history).',
+                transactionId: transaction._id,
+                status: transaction.status
             });
         }
 
         const user = await User.findById(req.userId);
+        
+        if (!user) {
+            return res.status(404).json({ 
+                success: false,
+                error: 'User not found' 
+            });
+        }
 
-        // Reverse the balance change if transaction affected balance
-        if (transaction.status === 'pending') {
-            const amountInUSD = transaction.amountUSD;
+        // Reverse balance change if force deleting completed or deleting pending
+        if (transaction.status === 'completed' || transaction.status === 'pending') {
+            const amountInUSD = transaction.amountUSD || 0;
 
-            // Reverse the transaction impact on balance
             if (['send', 'withdrawal', 'bill'].includes(transaction.type)) {
-                // Add back to balance (transaction was a deduction)
                 user.balanceUSD = parseFloat(user.balanceUSD) + parseFloat(amountInUSD);
             } else if (['receive', 'topup'].includes(transaction.type)) {
-                // Subtract from balance (transaction was an addition)
                 user.balanceUSD = parseFloat(user.balanceUSD) - parseFloat(amountInUSD);
             }
 
             await user.save();
+            console.log('Balance reversed. New balance:', user.balanceUSD);
+        } else if (transaction.status === 'failed' || transaction.status === 'cancelled') {
+            // No balance adjustment needed for failed/cancelled
+            await user.save({ validateBeforeSave: false });
         }
 
         await Transaction.findByIdAndDelete(req.params.id);
+        console.log('Transaction deleted successfully');
 
-        // Convert balance to user's preferred currency for response
         const balanceInPreferredCurrency = await convertCurrency(
             user.balanceUSD,
             'USD',
@@ -351,50 +369,137 @@ exports.deleteTransaction = async (req, res) => {
         res.json({
             success: true,
             message: 'Transaction deleted successfully',
+            wasForced: force === 'true',
             newBalance: balanceInPreferredCurrency,
             newBalanceUSD: user.balanceUSD,
             currency: user.currency,
         });
     } catch (error) {
         console.error('Delete transaction error:', error);
-        res.status(500).json({ error: 'Server error' });
+        res.status(500).json({ 
+            success: false,
+            error: 'Server error',
+            message: error.message 
+        });
     }
 };
 
-// Delete multiple transactions (bulk delete)
+// Delete ALL transactions and reset balance to zero (nuclear option for testing)
+exports.deleteAllTransactions = async (req, res) => {
+    try {
+        const { confirm } = req.body;
+
+        if (confirm !== 'DELETE_ALL') {
+            return res.status(400).json({
+                success: false,
+                error: 'To delete all transactions, send { "confirm": "DELETE_ALL" } in request body',
+                warning: 'This will delete ALL your transactions and reset your balance to 0'
+            });
+        }
+
+        const user = await User.findById(req.userId);
+        
+        if (!user) {
+            return res.status(404).json({ 
+                success: false,
+                error: 'User not found' 
+            });
+        }
+
+        // Count transactions before deletion
+        const count = await Transaction.countDocuments({ userId: req.userId });
+
+        // Delete all transactions for this user
+        await Transaction.deleteMany({ userId: req.userId });
+
+        // Reset balance to 0
+        user.balanceUSD = 0;
+        await user.save({ validateBeforeSave: false });
+
+        res.json({
+            success: true,
+            message: `All ${count} transactions deleted and balance reset to 0`,
+            deletedCount: count,
+            newBalance: 0,
+            newBalanceUSD: 0,
+            currency: user.currency,
+        });
+    } catch (error) {
+        console.error('Delete all transactions error:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Server error',
+            message: error.message 
+        });
+    }
+};
+
+// Bulk delete transactions
 exports.deleteTransactions = async (req, res) => {
     try {
+        const { force } = req.query; // Allow ?force=true to delete completed transactions
+        
+        console.log('Bulk delete called, force:', force);
+        console.log('Request body:', req.body);
+        
         const { transactionIds } = req.body;
 
         if (!transactionIds || !Array.isArray(transactionIds) || transactionIds.length === 0) {
-            return res.status(400).json({ error: 'Transaction IDs array is required' });
+            return res.status(400).json({ 
+                success: false,
+                error: 'transactionIds array is required in request body' 
+            });
         }
+
+        console.log('Looking for transactions:', transactionIds);
 
         const transactions = await Transaction.find({
             _id: { $in: transactionIds },
             userId: req.userId,
         });
 
+        console.log('Found transactions:', transactions.length);
+
         if (transactions.length === 0) {
-            return res.status(404).json({ error: 'No transactions found' });
+            return res.status(404).json({ 
+                success: false,
+                error: 'No transactions found for the provided IDs' 
+            });
         }
 
-        // Check if any completed transactions
+        // Check for completed transactions
         const completedTransactions = transactions.filter(tx => tx.status === 'completed');
-        if (completedTransactions.length > 0) {
+        const pendingTransactions = transactions.filter(tx => tx.status !== 'completed');
+        
+        console.log('Completed:', completedTransactions.length, 'Pending:', pendingTransactions.length);
+
+        if (completedTransactions.length > 0 && force !== 'true') {
             return res.status(400).json({ 
-                error: 'Cannot delete completed transactions',
-                completedCount: completedTransactions.length
+                success: false,
+                error: 'Cannot delete completed transactions. Add ?force=true to override (WARNING: This affects balance history).',
+                completedCount: completedTransactions.length,
+                pendingCount: pendingTransactions.length,
+                completedIds: completedTransactions.map(tx => tx._id),
+                pendingIds: pendingTransactions.map(tx => tx._id),
+                suggestion: 'You can delete only pending transactions or use ?force=true to delete all'
             });
         }
 
         const user = await User.findById(req.userId);
+        
+        if (!user) {
+            return res.status(404).json({ 
+                success: false,
+                error: 'User not found' 
+            });
+        }
+
         let balanceAdjustment = 0;
 
-        // Calculate total balance adjustment
+        // Calculate balance adjustment for all transactions being deleted
         transactions.forEach(tx => {
-            if (tx.status === 'pending') {
-                const amountInUSD = tx.amountUSD;
+            if (tx.status === 'completed' || tx.status === 'pending') {
+                const amountInUSD = tx.amountUSD || 0;
 
                 if (['send', 'withdrawal', 'bill'].includes(tx.type)) {
                     balanceAdjustment += parseFloat(amountInUSD);
@@ -404,15 +509,27 @@ exports.deleteTransactions = async (req, res) => {
             }
         });
 
+        console.log('Balance adjustment:', balanceAdjustment);
+
         // Apply balance adjustment
         user.balanceUSD = parseFloat(user.balanceUSD) + balanceAdjustment;
-        await user.save();
+        
+        // Skip validation if force=true to allow negative balances during cleanup
+        if (force === 'true') {
+            await user.save({ validateBeforeSave: false });
+        } else {
+            await user.save();
+        }
+        
+        console.log('New balance after adjustment:', user.balanceUSD);
 
-        // Delete all transactions
+        // Delete transactions
         const result = await Transaction.deleteMany({
             _id: { $in: transactionIds },
             userId: req.userId,
         });
+
+        console.log('Deleted count:', result.deletedCount);
 
         const balanceInPreferredCurrency = await convertCurrency(
             user.balanceUSD,
@@ -424,12 +541,142 @@ exports.deleteTransactions = async (req, res) => {
             success: true,
             message: `${result.deletedCount} transaction(s) deleted successfully`,
             deletedCount: result.deletedCount,
+            completedDeleted: completedTransactions.length,
+            pendingDeleted: pendingTransactions.length,
+            wasForced: force === 'true',
             newBalance: balanceInPreferredCurrency,
             newBalanceUSD: user.balanceUSD,
             currency: user.currency,
         });
     } catch (error) {
-        console.error('Bulk delete transactions error:', error);
-        res.status(500).json({ error: 'Server error' });
+        console.error('Bulk delete error:', error);
+        console.error('Error stack:', error.stack);
+        res.status(500).json({ 
+            success: false,
+            error: 'Server error',
+            message: error.message 
+        });
+    }
+};
+
+// Delete only pending/failed transactions (safe delete)
+exports.deletePendingTransactions = async (req, res) => {
+    try {
+        const { transactionIds } = req.body;
+
+        if (!transactionIds || !Array.isArray(transactionIds) || transactionIds.length === 0) {
+            return res.status(400).json({ 
+                success: false,
+                error: 'transactionIds array is required' 
+            });
+        }
+
+        const transactions = await Transaction.find({
+            _id: { $in: transactionIds },
+            userId: req.userId,
+            status: { $in: ['pending', 'failed', 'cancelled'] }
+        });
+
+        if (transactions.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                error: 'No pending/failed transactions found for the provided IDs' 
+            });
+        }
+
+        const user = await User.findById(req.userId);
+        let balanceAdjustment = 0;
+
+        transactions.forEach(tx => {
+            if (tx.status === 'pending') {
+                const amountInUSD = tx.amountUSD || 0;
+                if (['send', 'withdrawal', 'bill'].includes(tx.type)) {
+                    balanceAdjustment += parseFloat(amountInUSD);
+                } else if (['receive', 'topup'].includes(tx.type)) {
+                    balanceAdjustment -= parseFloat(amountInUSD);
+                }
+            }
+        });
+
+        user.balanceUSD = parseFloat(user.balanceUSD) + balanceAdjustment;
+        await user.save();
+
+        const result = await Transaction.deleteMany({
+            _id: { $in: transactionIds },
+            userId: req.userId,
+            status: { $in: ['pending', 'failed', 'cancelled'] }
+        });
+
+        const balanceInPreferredCurrency = await convertCurrency(
+            user.balanceUSD,
+            'USD',
+            user.currency
+        );
+
+        res.json({
+            success: true,
+            message: `${result.deletedCount} pending/failed transaction(s) deleted successfully`,
+            deletedCount: result.deletedCount,
+            newBalance: balanceInPreferredCurrency,
+            newBalanceUSD: user.balanceUSD,
+            currency: user.currency,
+        });
+    } catch (error) {
+        console.error('Delete pending transactions error:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Server error',
+            message: error.message 
+        });
+    }
+};
+
+// Helper to get transaction IDs
+exports.getTransactionIds = async (req, res) => {
+    try {
+        const transactions = await Transaction.find({ userId: req.userId })
+            .select('_id type amount currency status createdAt')
+            .sort({ createdAt: -1 })
+            .limit(50);
+
+        const grouped = {
+            completed: [],
+            pending: [],
+            failed: [],
+            cancelled: []
+        };
+
+        transactions.forEach(tx => {
+            const txData = {
+                id: tx._id.toString(),
+                type: tx.type,
+                amount: tx.amount,
+                currency: tx.currency,
+                date: tx.createdAt
+            };
+            
+            if (grouped[tx.status]) {
+                grouped[tx.status].push(txData);
+            }
+        });
+
+        res.json({ 
+            success: true, 
+            count: transactions.length,
+            byStatus: {
+                completed: grouped.completed.length,
+                pending: grouped.pending.length,
+                failed: grouped.failed.length,
+                cancelled: grouped.cancelled.length
+            },
+            transactions: grouped
+        });
+    } catch (error) {
+        console.error('Get IDs error:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Server error',
+            message: error.message 
+        });
     }
 };
