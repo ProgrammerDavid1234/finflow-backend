@@ -15,7 +15,13 @@ router.get('/', transactionController.getTransactions);
 // GET /api/transactions/statistics - Get transaction statistics
 router.get('/statistics', transactionController.getStatistics);
 
+// DELETE /api/transactions/bulk - Delete multiple transactions (before /:id route)
+router.delete('/bulk', transactionController.deleteTransactions);
+
 // GET /api/transactions/:id - Get single transaction
 router.get('/:id', transactionController.getTransaction);
+
+// DELETE /api/transactions/:id - Delete single transaction
+router.delete('/:id', transactionController.deleteTransaction);
 
 module.exports = router;

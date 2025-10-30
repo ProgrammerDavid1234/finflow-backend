@@ -300,3 +300,134 @@ exports.getStatistics = async (req, res) => {
         res.status(500).json({ error: 'Server error' });
     }
 };
+// Delete transaction with balance reversal
+exports.deleteTransaction = async (req, res) => {
+    try {
+        const transaction = await Transaction.findOne({
+            _id: req.params.id,
+            userId: req.userId,
+        });
+
+        if (!transaction) {
+            return res.status(404).json({ error: 'Transaction not found' });
+        }
+
+        // Only allow deletion of pending or failed transactions to maintain data integrity
+        if (transaction.status === 'completed') {
+            return res.status(400).json({ 
+                error: 'Cannot delete completed transactions. Please contact support for reversals.' 
+            });
+        }
+
+        const user = await User.findById(req.userId);
+
+        // Reverse the balance change if transaction affected balance
+        if (transaction.status === 'pending') {
+            const amountInUSD = transaction.amountUSD;
+
+            // Reverse the transaction impact on balance
+            if (['send', 'withdrawal', 'bill'].includes(transaction.type)) {
+                // Add back to balance (transaction was a deduction)
+                user.balanceUSD = parseFloat(user.balanceUSD) + parseFloat(amountInUSD);
+            } else if (['receive', 'topup'].includes(transaction.type)) {
+                // Subtract from balance (transaction was an addition)
+                user.balanceUSD = parseFloat(user.balanceUSD) - parseFloat(amountInUSD);
+            }
+
+            await user.save();
+        }
+
+        await Transaction.findByIdAndDelete(req.params.id);
+
+        // Convert balance to user's preferred currency for response
+        const balanceInPreferredCurrency = await convertCurrency(
+            user.balanceUSD,
+            'USD',
+            user.currency
+        );
+
+        res.json({
+            success: true,
+            message: 'Transaction deleted successfully',
+            newBalance: balanceInPreferredCurrency,
+            newBalanceUSD: user.balanceUSD,
+            currency: user.currency,
+        });
+    } catch (error) {
+        console.error('Delete transaction error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+};
+
+// Delete multiple transactions (bulk delete)
+exports.deleteTransactions = async (req, res) => {
+    try {
+        const { transactionIds } = req.body;
+
+        if (!transactionIds || !Array.isArray(transactionIds) || transactionIds.length === 0) {
+            return res.status(400).json({ error: 'Transaction IDs array is required' });
+        }
+
+        const transactions = await Transaction.find({
+            _id: { $in: transactionIds },
+            userId: req.userId,
+        });
+
+        if (transactions.length === 0) {
+            return res.status(404).json({ error: 'No transactions found' });
+        }
+
+        // Check if any completed transactions
+        const completedTransactions = transactions.filter(tx => tx.status === 'completed');
+        if (completedTransactions.length > 0) {
+            return res.status(400).json({ 
+                error: 'Cannot delete completed transactions',
+                completedCount: completedTransactions.length
+            });
+        }
+
+        const user = await User.findById(req.userId);
+        let balanceAdjustment = 0;
+
+        // Calculate total balance adjustment
+        transactions.forEach(tx => {
+            if (tx.status === 'pending') {
+                const amountInUSD = tx.amountUSD;
+
+                if (['send', 'withdrawal', 'bill'].includes(tx.type)) {
+                    balanceAdjustment += parseFloat(amountInUSD);
+                } else if (['receive', 'topup'].includes(tx.type)) {
+                    balanceAdjustment -= parseFloat(amountInUSD);
+                }
+            }
+        });
+
+        // Apply balance adjustment
+        user.balanceUSD = parseFloat(user.balanceUSD) + balanceAdjustment;
+        await user.save();
+
+        // Delete all transactions
+        const result = await Transaction.deleteMany({
+            _id: { $in: transactionIds },
+            userId: req.userId,
+        });
+
+        const balanceInPreferredCurrency = await convertCurrency(
+            user.balanceUSD,
+            'USD',
+            user.currency
+        );
+
+        res.json({
+            success: true,
+            message: `${result.deletedCount} transaction(s) deleted successfully`,
+            deletedCount: result.deletedCount,
+            newBalance: balanceInPreferredCurrency,
+            newBalanceUSD: user.balanceUSD,
+            currency: user.currency,
+        });
+    } catch (error) {
+        console.error('Bulk delete transactions error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+};
