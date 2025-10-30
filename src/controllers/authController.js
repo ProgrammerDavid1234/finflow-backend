@@ -143,6 +143,7 @@ exports.login = async (req, res) => {
 exports.requestNonce = async (req, res) => {
     try {
         const { walletAddress } = req.body;
+        const userId = req.userId; // From auth middleware (if authenticated)
 
         if (!walletAddress) {
             return res.status(400).json({ error: 'Wallet address is required' });
@@ -155,8 +156,47 @@ exports.requestNonce = async (req, res) => {
 
         const normalizedAddress = walletAddress.toLowerCase();
 
-        // Check if user exists
-        let user = await User.findOne({ walletAddress: normalizedAddress });
+        // Check if wallet is already connected to another user
+        const existingWallet = await User.findOne({ walletAddress: normalizedAddress });
+
+        // If user is authenticated (logged in with email)
+        if (userId) {
+            const currentUser = await User.findById(userId);
+            
+            if (!currentUser) {
+                return res.status(404).json({ error: 'User not found' });
+            }
+
+            // Check if this wallet belongs to someone else
+            if (existingWallet && existingWallet._id.toString() !== userId) {
+                return res.status(400).json({ 
+                    error: 'This wallet is already connected to another account' 
+                });
+            }
+
+            // Check if user already has a different wallet connected
+            if (currentUser.walletAddress && currentUser.walletAddress !== normalizedAddress) {
+                return res.status(400).json({ 
+                    error: 'You already have a different wallet connected. Please disconnect it first.',
+                    currentWallet: currentUser.walletAddress
+                });
+            }
+
+            // Generate new nonce for the authenticated user
+            currentUser.nonce = Math.floor(Math.random() * 1000000).toString();
+            await currentUser.save();
+
+            return res.json({
+                success: true,
+                nonce: currentUser.nonce,
+                message: `Please sign this message to authenticate: ${currentUser.nonce}`,
+                isConnecting: true, // Flag to indicate this is connecting wallet to existing account
+                userEmail: currentUser.email,
+            });
+        }
+
+        // If user is not authenticated (wallet-only login/signup)
+        let user = existingWallet;
 
         if (!user) {
             // Create new user with wallet
@@ -177,7 +217,7 @@ exports.requestNonce = async (req, res) => {
             success: true,
             nonce: user.nonce,
             message: `Please sign this message to authenticate: ${user.nonce}`,
-            isNewUser: !user.hasPassword,
+            isNewUser: !user.hasPassword && !user.email,
         });
     } catch (error) {
         console.error('Request nonce error:', error);
@@ -185,10 +225,11 @@ exports.requestNonce = async (req, res) => {
     }
 };
 
-// Step 2: Verify wallet signature and login/signup
+// Step 2: Verify wallet signature and login/signup/connect
 exports.verifyWallet = async (req, res) => {
     try {
         const { walletAddress, signature, walletType } = req.body;
+        const userId = req.userId; // From auth middleware (if authenticated)
 
         if (!walletAddress || !signature) {
             return res.status(400).json({ error: 'Wallet address and signature are required' });
@@ -196,7 +237,75 @@ exports.verifyWallet = async (req, res) => {
 
         const normalizedAddress = walletAddress.toLowerCase();
 
-        // Find user
+        // If user is authenticated (connecting wallet to existing email account)
+        if (userId) {
+            const currentUser = await User.findById(userId);
+            
+            if (!currentUser) {
+                return res.status(404).json({ error: 'User not found' });
+            }
+
+            // Verify signature
+            const message = `Please sign this message to authenticate: ${currentUser.nonce}`;
+            const recoveredAddress = ethers.verifyMessage(message, signature);
+
+            if (recoveredAddress.toLowerCase() !== normalizedAddress) {
+                return res.status(401).json({ error: 'Invalid signature' });
+            }
+
+            // Check if wallet is already connected to another user
+            const existingWallet = await User.findOne({ 
+                walletAddress: normalizedAddress,
+                _id: { $ne: userId }
+            });
+
+            if (existingWallet) {
+                return res.status(400).json({ 
+                    error: 'This wallet is already connected to another account' 
+                });
+            }
+
+            // Connect wallet to user account
+            currentUser.walletAddress = normalizedAddress;
+            currentUser.walletType = walletType && ['metamask', 'walletconnect'].includes(walletType) 
+                ? walletType 
+                : 'metamask';
+            
+            // Update auth method to hybrid (can use both email and wallet)
+            if (currentUser.authMethod === 'email') {
+                currentUser.authMethod = 'hybrid';
+            }
+
+            // Generate new nonce
+            currentUser.nonce = Math.floor(Math.random() * 1000000).toString();
+            
+            await currentUser.save();
+
+            // Generate new token with wallet address
+            const token = generateToken(currentUser._id, currentUser.email, currentUser.walletAddress);
+
+            return res.json({
+                success: true,
+                message: 'Wallet connected successfully to your account',
+                token,
+                authMethod: currentUser.authMethod,
+                user: {
+                    id: currentUser._id,
+                    email: currentUser.email,
+                    fullName: currentUser.fullName,
+                    phoneNumber: currentUser.phoneNumber,
+                    balance: currentUser.balance,
+                    currency: currentUser.currency,
+                    profileImage: currentUser.profileImage,
+                    walletAddress: currentUser.walletAddress,
+                    walletType: currentUser.walletType,
+                    authMethod: currentUser.authMethod,
+                    hasPassword: currentUser.hasPassword,
+                },
+            });
+        }
+
+        // Standard wallet authentication (login/signup with wallet only)
         const user = await User.findOne({ walletAddress: normalizedAddress });
         if (!user) {
             return res.status(404).json({ error: 'Please request nonce first' });
@@ -249,6 +358,55 @@ exports.verifyWallet = async (req, res) => {
     } catch (error) {
         console.error('Verify wallet error:', error);
         res.status(500).json({ error: 'Server error during wallet verification' });
+    }
+};
+
+// Disconnect wallet from account (new endpoint)
+exports.disconnectWallet = async (req, res) => {
+    try {
+        const user = await User.findById(req.userId);
+
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        if (!user.walletAddress) {
+            return res.status(400).json({ error: 'No wallet connected to this account' });
+        }
+
+        // Check if user has email/password (don't disconnect if wallet is only auth method)
+        if (!user.hasPassword && user.authMethod === 'wallet') {
+            return res.status(400).json({ 
+                error: 'Cannot disconnect wallet. Please set a password first to maintain account access.' 
+            });
+        }
+
+        // Disconnect wallet
+        user.walletAddress = null;
+        user.walletType = 'none';
+        
+        // Update auth method back to email if they have password
+        if (user.hasPassword) {
+            user.authMethod = 'email';
+        }
+
+        await user.save();
+
+        res.json({
+            success: true,
+            message: 'Wallet disconnected successfully',
+            user: {
+                id: user._id,
+                email: user.email,
+                fullName: user.fullName,
+                walletAddress: user.walletAddress,
+                walletType: user.walletType,
+                authMethod: user.authMethod,
+            },
+        });
+    } catch (error) {
+        console.error('Disconnect wallet error:', error);
+        res.status(500).json({ error: 'Server error' });
     }
 };
 
