@@ -17,9 +17,21 @@ const transactionSchema = new mongoose.Schema({
         required: true,
         min: 0,
     },
+    // Amount in USD for consistent balance tracking
+    amountUSD: {
+        type: Number,
+        required: true,
+        min: 0,
+    },
     currency: {
         type: String,
         default: 'USD',
+        enum: ['USD', 'EUR', 'GBP', 'NGN', 'BTC', 'ETH'],
+    },
+    // Exchange rate at time of transaction (for historical accuracy)
+    exchangeRate: {
+        type: Number,
+        default: 1,
     },
     recipient: {
         name: String,
@@ -44,6 +56,7 @@ const transactionSchema = new mongoose.Schema({
         type: Number,
         default: 0,
     },
+    // Balance after transaction (in USD)
     balanceAfter: {
         type: Number,
         default: 0,
@@ -55,5 +68,15 @@ const transactionSchema = new mongoose.Schema({
 // Index for faster queries
 transactionSchema.index({ userId: 1, createdAt: -1 });
 transactionSchema.index({ status: 1 });
+transactionSchema.index({ type: 1 });
+
+// Pre-save hook to calculate amountUSD if not provided
+transactionSchema.pre('save', async function(next) {
+    if (!this.amountUSD) {
+        const { convertCurrency } = require('../services/currencyService');
+        this.amountUSD = await convertCurrency(this.amount, this.currency, 'USD');
+    }
+    next();
+});
 
 module.exports = mongoose.model('Transaction', transactionSchema);

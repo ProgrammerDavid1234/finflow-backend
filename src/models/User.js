@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const userSchema = new mongoose.Schema({
     email: {
         type: String,
-        sparse: true, // Allow multiple null values
+        sparse: true,
         unique: true,
         lowercase: true,
         trim: true,
@@ -11,7 +11,6 @@ const userSchema = new mongoose.Schema({
     },
     password: {
         type: String,
-        // Password is optional for Web3 wallet users
         default: null,
     },
     fullName: {
@@ -28,12 +27,20 @@ const userSchema = new mongoose.Schema({
         type: String,
         default: '',
     },
-    balance: {
+    // Balance is always stored in USD for consistency
+    balanceUSD: {
         type: Number,
         default: 0,
         min: 0,
     },
+    // Display currency (what user wants to see)
     currency: {
+        type: String,
+        default: 'USD',
+        enum: ['USD', 'EUR', 'GBP', 'NGN', 'BTC', 'ETH'],
+    },
+    // Original currency of the account (for reference)
+    baseCurrency: {
         type: String,
         default: 'USD',
         enum: ['USD', 'EUR', 'GBP', 'NGN', 'BTC', 'ETH'],
@@ -45,7 +52,7 @@ const userSchema = new mongoose.Schema({
     // Web3 Authentication Fields
     walletAddress: {
         type: String,
-        sparse: true, // Allow multiple null values
+        sparse: true,
         unique: true,
         trim: true,
         lowercase: true,
@@ -86,6 +93,12 @@ userSchema.index({ email: 1 });
 userSchema.index({ walletAddress: 1 });
 userSchema.index({ authMethod: 1 });
 
+// Virtual field for balance in user's preferred currency
+userSchema.virtual('balance').get(function() {
+    // This will be calculated dynamically by the controller
+    return this.balanceUSD;
+});
+
 // Validation: Either email or walletAddress must be present
 userSchema.pre('save', function(next) {
     if (!this.email && !this.walletAddress) {
@@ -94,5 +107,11 @@ userSchema.pre('save', function(next) {
         next();
     }
 });
+
+// Method to get balance in specific currency
+userSchema.methods.getBalanceInCurrency = async function(targetCurrency) {
+    const { convertCurrency } = require('../services/currencyService');
+    return await convertCurrency(this.balanceUSD, 'USD', targetCurrency);
+};
 
 module.exports = mongoose.model('User', userSchema);

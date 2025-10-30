@@ -1,61 +1,118 @@
 const User = require('../models/User');
 const bcrypt = require('bcryptjs');
-const { validatePhoneNumber } = require('../utils/validators');
+const { validatePassword } = require('../utils/validators');
+const { convertCurrency, getExchangeRate, getSupportedCurrencies } = require('../service/currencyService');
 
-// Get user profile
-// Get user profile
+// Get user profile with balance in preferred currency
 exports.getProfile = async (req, res) => {
-  try {
-    const user = await User.findById(req.userId).select('-password');
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
+    try {
+        const user = await User.findById(req.userId).select('-password');
+
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        // Convert balance from USD to user's preferred currency
+        const balanceInPreferredCurrency = await convertCurrency(
+            user.balanceUSD,
+            'USD',
+            user.currency
+        );
+
+        const userProfile = {
+            id: user._id,
+            email: user.email,
+            fullName: user.fullName,
+            phoneNumber: user.phoneNumber,
+            profileImage: user.profileImage,
+            balance: balanceInPreferredCurrency,
+            balanceUSD: user.balanceUSD, // Keep USD balance for reference
+            currency: user.currency,
+            baseCurrency: user.baseCurrency,
+            isVerified: user.isVerified,
+            walletAddress: user.walletAddress,
+            walletType: user.walletType,
+            authMethod: user.authMethod,
+            hasPassword: user.hasPassword,
+            joined: user.createdAt.toLocaleDateString('en-US', { 
+                year: 'numeric', 
+                month: 'short' 
+            }),
+        };
+
+        res.json({
+            success: true,
+            user: userProfile,
+        });
+    } catch (error) {
+        console.error('Get profile error:', error);
+        res.status(500).json({ error: 'Server error' });
     }
-
-    // Format join date
-    const joinedMonthYear = user.createdAt
-      ? user.createdAt.toLocaleString('en-US', { month: 'long', year: 'numeric' })
-      : null;
-
-    res.json({
-      success: true,
-      user: {
-        ...user.toObject(),
-        joined: joinedMonthYear, // <-- add this to response
-      },
-    });
-  } catch (error) {
-    console.error('Get profile error:', error);
-    res.status(500).json({ error: 'Server error' });
-  }
 };
 
-
-// Update user profile
+// Update user profile (including currency change with conversion)
 exports.updateProfile = async (req, res) => {
     try {
-        const { fullName, phoneNumber, profileImage, currency } = req.body;
+        const { fullName, phoneNumber, currency, profileImage } = req.body;
 
-        const updateData = {};
-        if (fullName !== undefined) updateData.fullName = fullName;
-        if (phoneNumber !== undefined) {
-            if (phoneNumber && !validatePhoneNumber(phoneNumber)) {
-                return res.status(400).json({ error: 'Invalid phone number format' });
-            }
-            updateData.phoneNumber = phoneNumber;
+        const user = await User.findById(req.userId);
+
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
         }
-        if (profileImage !== undefined) updateData.profileImage = profileImage;
-        if (currency !== undefined) updateData.currency = currency;
 
-        const user = await User.findByIdAndUpdate(
-            req.userId,
-            updateData,
-            { new: true, runValidators: true }
-        ).select('-password');
+        // Update basic fields
+        if (fullName !== undefined) user.fullName = fullName;
+        if (phoneNumber !== undefined) user.phoneNumber = phoneNumber;
+        if (profileImage !== undefined) user.profileImage = profileImage;
+
+        // Handle currency change
+        if (currency && currency !== user.currency) {
+            const validCurrencies = ['USD', 'EUR', 'GBP', 'NGN', 'BTC', 'ETH'];
+            
+            if (!validCurrencies.includes(currency)) {
+                return res.status(400).json({ error: 'Invalid currency' });
+            }
+
+            // Balance is stored in USD, so we don't need to convert it
+            // Just update the display currency preference
+            user.currency = currency;
+        }
+
+        await user.save();
+
+        // Convert balance to new currency for response
+        const balanceInPreferredCurrency = await convertCurrency(
+            user.balanceUSD,
+            'USD',
+            user.currency
+        );
+
+        const userProfile = {
+            id: user._id,
+            email: user.email,
+            fullName: user.fullName,
+            phoneNumber: user.phoneNumber,
+            profileImage: user.profileImage,
+            balance: balanceInPreferredCurrency,
+            balanceUSD: user.balanceUSD,
+            currency: user.currency,
+            baseCurrency: user.baseCurrency,
+            isVerified: user.isVerified,
+            walletAddress: user.walletAddress,
+            walletType: user.walletType,
+            authMethod: user.authMethod,
+            hasPassword: user.hasPassword,
+            joined: user.createdAt.toLocaleDateString('en-US', { 
+                year: 'numeric', 
+                month: 'short' 
+            }),
+        };
 
         res.json({
             success: true,
             message: 'Profile updated successfully',
-            user,
+            user: userProfile,
         });
     } catch (error) {
         console.error('Update profile error:', error);
@@ -69,22 +126,24 @@ exports.changePassword = async (req, res) => {
         const { currentPassword, newPassword } = req.body;
 
         if (!currentPassword || !newPassword) {
-            return res.status(400).json({ error: 'Both passwords are required' });
+            return res.status(400).json({ error: 'Current and new password are required' });
         }
 
-        if (newPassword.length < 6) {
+        if (!validatePassword(newPassword)) {
             return res.status(400).json({ error: 'New password must be at least 6 characters' });
         }
 
         const user = await User.findById(req.userId);
-        
-        // Verify current password
+
+        if (!user || !user.password) {
+            return res.status(400).json({ error: 'Cannot change password' });
+        }
+
         const isPasswordValid = await bcrypt.compare(currentPassword, user.password);
         if (!isPasswordValid) {
             return res.status(401).json({ error: 'Current password is incorrect' });
         }
 
-        // Hash and update new password
         user.password = await bcrypt.hash(newPassword, 10);
         await user.save();
 
@@ -98,17 +157,93 @@ exports.changePassword = async (req, res) => {
     }
 };
 
-// Get user balance
+// Get balance in multiple currencies
 exports.getBalance = async (req, res) => {
     try {
-        const user = await User.findById(req.userId).select('balance currency');
+        const user = await User.findById(req.userId);
+
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        // Get balance in user's preferred currency
+        const balanceInPreferredCurrency = await convertCurrency(
+            user.balanceUSD,
+            'USD',
+            user.currency
+        );
+
+        // Optionally get balance in all supported currencies
+        const balances = {
+            [user.currency]: balanceInPreferredCurrency,
+            USD: user.balanceUSD,
+        };
+
+        // Get exchange rate for reference
+        const exchangeRate = await getExchangeRate('USD', user.currency);
+
         res.json({
             success: true,
-            balance: user.balance,
+            balance: balanceInPreferredCurrency,
+            balanceUSD: user.balanceUSD,
             currency: user.currency,
+            exchangeRate,
+            balances,
         });
     } catch (error) {
         console.error('Get balance error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+};
+
+// Get supported currencies with rates
+exports.getCurrencies = async (req, res) => {
+    try {
+        const currencies = await getSupportedCurrencies();
+
+        res.json({
+            success: true,
+            currencies,
+        });
+    } catch (error) {
+        console.error('Get currencies error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+};
+
+// Convert amount between currencies (utility endpoint)
+exports.convertAmount = async (req, res) => {
+    try {
+        const { amount, fromCurrency, toCurrency } = req.query;
+
+        if (!amount || !fromCurrency || !toCurrency) {
+            return res.status(400).json({ 
+                error: 'Amount, fromCurrency, and toCurrency are required' 
+            });
+        }
+
+        const convertedAmount = await convertCurrency(
+            parseFloat(amount),
+            fromCurrency,
+            toCurrency
+        );
+
+        const rate = await getExchangeRate(fromCurrency, toCurrency);
+
+        res.json({
+            success: true,
+            original: {
+                amount: parseFloat(amount),
+                currency: fromCurrency
+            },
+            converted: {
+                amount: convertedAmount,
+                currency: toCurrency
+            },
+            exchangeRate: rate,
+        });
+    } catch (error) {
+        console.error('Convert amount error:', error);
         res.status(500).json({ error: 'Server error' });
     }
 };
