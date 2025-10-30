@@ -27,6 +27,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/api/auth', authRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/transactions', transactionRoutes);
+// app.use('/api/transactions/bulk', transactionRoutes);
 app.use('/api/budgets', budgetRoutes);
 
 // Health check route

@@ -3,6 +3,9 @@ const router = express.Router();
 const transactionController = require('../controllers/transactionController');
 const authenticateToken = require('../middleware/auth');
 
+// Log to verify routes are loaded
+console.log('Transaction routes loaded');
+
 // All routes require authentication
 router.use(authenticateToken);
 

@@ -300,6 +300,8 @@ exports.getStatistics = async (req, res) => {
         res.status(500).json({ error: 'Server error' });
     }
 };
+// Add these exports to your transactionController.js file
+
 // Delete transaction with balance reversal
 exports.deleteTransaction = async (req, res) => {
     try {
