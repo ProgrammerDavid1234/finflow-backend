@@ -1,165 +1,170 @@
-// src/services/currencyService.js
 const axios = require('axios');
 
-// Exchange rates relative to USD (base currency)
-// You can fetch these from an API like exchangerate-api.com or fixer.io
-const STATIC_RATES = {
+// Cache for exchange rates (updates every 1 hour)
+let cachedRates = null;
+let lastFetchTime = null;
+const CACHE_DURATION = 60 * 60 * 1000; // 1 hour in milliseconds
+
+// Fallback rates if API fails
+const FALLBACK_RATES = {
     USD: 1,
-    EUR: 0.92,
-    GBP: 0.79,
-    NGN: 1550,
+    EUR: 0.85,
+    GBP: 0.73,
+    NGN: 1500,
     BTC: 0.000023,
-    ETH: 0.00042
+    ETH: 0.00031,
 };
 
-// Cache for exchange rates
-let cachedRates = { ...STATIC_RATES };
-let lastFetchTime = null;
-const CACHE_DURATION = 3600000; // 1 hour in milliseconds
-
-/**
- * Fetch live exchange rates from external API
- * Free API options:
- * - https://exchangerate-api.com (1500 requests/month free)
- * - https://fixer.io (100 requests/month free)
- * - https://openexchangerates.org (1000 requests/month free)
- */
-const fetchLiveRates = async () => {
+// Get exchange rates from API or cache
+async function getExchangeRates() {
     try {
-        // Example using exchangerate-api.com (replace with your API key)
+        // Check if we have cached rates that are still valid
+        const now = Date.now();
+        if (cachedRates && lastFetchTime && (now - lastFetchTime) < CACHE_DURATION) {
+            console.log('Using cached exchange rates');
+            return cachedRates;
+        }
+
+        // Fetch new rates from API
+        console.log('Fetching fresh exchange rates...');
+        
         const API_KEY = process.env.EXCHANGE_RATE_API_KEY;
         
         if (!API_KEY) {
-            console.log('No API key found, using static rates');
-            return STATIC_RATES;
+            console.warn('Exchange rate API key not found, using fallback rates');
+            return FALLBACK_RATES;
         }
 
+        // Using exchangerate-api.com (free tier: 1500 requests/month)
         const response = await axios.get(
-            `https://v6.exchangerate-api.com/v6/${API_KEY}/latest/USD`
+            `https://v6.exchangerate-api.com/v6/${API_KEY}/latest/USD`,
+            { timeout: 5000 }
         );
 
         if (response.data && response.data.conversion_rates) {
-            const rates = {
+            const rates = response.data.conversion_rates;
+            
+            // Add crypto rates (you might want to fetch these from a crypto API)
+            // For now, using approximate values
+            cachedRates = {
                 USD: 1,
-                EUR: response.data.conversion_rates.EUR || STATIC_RATES.EUR,
-                GBP: response.data.conversion_rates.GBP || STATIC_RATES.GBP,
-                NGN: response.data.conversion_rates.NGN || STATIC_RATES.NGN,
-                BTC: response.data.conversion_rates.BTC || STATIC_RATES.BTC,
-                ETH: STATIC_RATES.ETH, // Crypto rates not in standard APIs
+                EUR: rates.EUR || FALLBACK_RATES.EUR,
+                GBP: rates.GBP || FALLBACK_RATES.GBP,
+                NGN: rates.NGN || FALLBACK_RATES.NGN,
+                BTC: 1 / 43000, // Approximate BTC price in USD
+                ETH: 1 / 2300,  // Approximate ETH price in USD
             };
-
-            cachedRates = rates;
-            lastFetchTime = Date.now();
-            return rates;
+            
+            lastFetchTime = now;
+            console.log('Exchange rates updated successfully');
+            return cachedRates;
+        } else {
+            throw new Error('Invalid API response');
         }
-
-        return STATIC_RATES;
     } catch (error) {
         console.error('Error fetching exchange rates:', error.message);
-        return STATIC_RATES;
+        
+        // If we have cached rates (even if expired), use them
+        if (cachedRates) {
+            console.log('Using expired cached rates due to API error');
+            return cachedRates;
+        }
+        
+        // Otherwise use fallback
+        console.log('Using fallback exchange rates');
+        return FALLBACK_RATES;
     }
-};
+}
 
-/**
- * Get current exchange rates (with caching)
- */
-const getExchangeRates = async () => {
-    const now = Date.now();
-    
-    // Return cached rates if still valid
-    if (lastFetchTime && (now - lastFetchTime) < CACHE_DURATION) {
-        return cachedRates;
+// Convert currency
+async function convertCurrency(amount, fromCurrency, toCurrency) {
+    try {
+        // Validate inputs
+        if (isNaN(amount) || amount < 0) {
+            throw new Error('Invalid amount');
+        }
+
+        if (!fromCurrency || !toCurrency) {
+            throw new Error('Currency codes are required');
+        }
+
+        // If same currency, return original amount
+        if (fromCurrency === toCurrency) {
+            return parseFloat(amount);
+        }
+
+        // Get exchange rates
+        const rates = await getExchangeRates();
+
+        // Validate currencies
+        if (!rates[fromCurrency]) {
+            throw new Error(`Unsupported currency: ${fromCurrency}`);
+        }
+        if (!rates[toCurrency]) {
+            throw new Error(`Unsupported currency: ${toCurrency}`);
+        }
+
+        // Convert: amount in fromCurrency -> USD -> toCurrency
+        const amountInUSD = parseFloat(amount) / rates[fromCurrency];
+        const convertedAmount = amountInUSD * rates[toCurrency];
+
+        return parseFloat(convertedAmount.toFixed(8)); // Keep 8 decimals for crypto
+    } catch (error) {
+        console.error('Currency conversion error:', error);
+        throw error;
     }
+}
 
-    // Fetch new rates
-    return await fetchLiveRates();
-};
+// Get exchange rate between two currencies
+async function getExchangeRate(fromCurrency, toCurrency) {
+    try {
+        const rates = await getExchangeRates();
+        
+        if (!rates[fromCurrency] || !rates[toCurrency]) {
+            throw new Error('Invalid currency');
+        }
 
-/**
- * Convert amount from one currency to another
- * @param {number} amount - Amount to convert
- * @param {string} fromCurrency - Source currency code
- * @param {string} toCurrency - Target currency code
- * @returns {number} Converted amount
- */
-const convertCurrency = async (amount, fromCurrency, toCurrency) => {
-    if (fromCurrency === toCurrency) {
-        return amount;
+        // Rate from fromCurrency to toCurrency
+        const rate = rates[toCurrency] / rates[fromCurrency];
+        return parseFloat(rate.toFixed(8));
+    } catch (error) {
+        console.error('Get exchange rate error:', error);
+        throw error;
     }
+}
 
-    const rates = await getExchangeRates();
-
-    // Convert to USD first, then to target currency
-    const amountInUSD = amount / rates[fromCurrency];
-    const convertedAmount = amountInUSD * rates[toCurrency];
-
-    return parseFloat(convertedAmount.toFixed(8));
-};
-
-/**
- * Get exchange rate between two currencies
- * @param {string} fromCurrency - Source currency code
- * @param {string} toCurrency - Target currency code
- * @returns {number} Exchange rate
- */
-const getExchangeRate = async (fromCurrency, toCurrency) => {
-    if (fromCurrency === toCurrency) {
-        return 1;
-    }
-
-    const rates = await getExchangeRates();
-    const rate = rates[toCurrency] / rates[fromCurrency];
-    
-    return parseFloat(rate.toFixed(8));
-};
-
-/**
- * Format currency amount with symbol
- * @param {number} amount - Amount to format
- * @param {string} currency - Currency code
- * @returns {string} Formatted amount
- */
-const formatCurrency = (amount, currency) => {
+// Format currency with proper symbol and decimals
+function formatCurrency(amount, currency) {
     const symbols = {
         USD: '$',
         EUR: '€',
         GBP: '£',
         NGN: '₦',
         BTC: '₿',
-        ETH: 'Ξ'
+        ETH: 'Ξ',
     };
 
     const symbol = symbols[currency] || currency;
-    const decimals = ['BTC', 'ETH'].includes(currency) ? 8 : 2;
-    
-    return `${symbol}${amount.toLocaleString('en-US', {
-        minimumFractionDigits: decimals,
-        maximumFractionDigits: decimals
-    })}`;
-};
+    const numericAmount = parseFloat(amount);
 
-/**
- * Get all supported currencies with current rates
- * @returns {Object} Currency information
- */
-const getSupportedCurrencies = async () => {
-    const rates = await getExchangeRates();
-    
-    return {
-        USD: { name: 'US Dollar', symbol: '$', rate: rates.USD },
-        EUR: { name: 'Euro', symbol: '€', rate: rates.EUR },
-        GBP: { name: 'British Pound', symbol: '£', rate: rates.GBP },
-        NGN: { name: 'Nigerian Naira', symbol: '₦', rate: rates.NGN },
-        BTC: { name: 'Bitcoin', symbol: '₿', rate: rates.BTC },
-        ETH: { name: 'Ethereum', symbol: 'Ξ', rate: rates.ETH }
-    };
-};
+    if (isNaN(numericAmount)) {
+        return `${symbol}0.00`;
+    }
+
+    // Use more decimals for crypto
+    if (['BTC', 'ETH'].includes(currency)) {
+        return `${symbol}${numericAmount.toFixed(8)}`;
+    }
+
+    return `${symbol}${numericAmount.toLocaleString('en-US', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+    })}`;
+}
 
 module.exports = {
+    getExchangeRates,
     convertCurrency,
     getExchangeRate,
-    getExchangeRates,
     formatCurrency,
-    getSupportedCurrencies,
-    fetchLiveRates
 };
