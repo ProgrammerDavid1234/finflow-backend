@@ -66,7 +66,7 @@ exports.updateProfile = async (req, res) => {
         if (phoneNumber !== undefined) user.phoneNumber = phoneNumber;
         if (profileImage !== undefined) user.profileImage = profileImage;
 
-        // Handle currency change
+        // Handle currency change with immediate conversion
         if (currency && currency !== user.currency) {
             const validCurrencies = ['USD', 'EUR', 'GBP', 'NGN', 'BTC', 'ETH'];
             
@@ -74,9 +74,11 @@ exports.updateProfile = async (req, res) => {
                 return res.status(400).json({ error: 'Invalid currency' });
             }
 
-            // Balance is stored in USD, so we don't need to convert it
-            // Just update the display currency preference
+            // Update the display currency preference
             user.currency = currency;
+            
+            console.log(`Currency changed from ${user.currency} to ${currency}`);
+            console.log(`Balance in USD: ${user.balanceUSD}`);
         }
 
         await user.save();
@@ -87,6 +89,8 @@ exports.updateProfile = async (req, res) => {
             'USD',
             user.currency
         );
+
+        console.log(`Converted balance: ${balanceInPreferredCurrency} ${user.currency}`);
 
         const userProfile = {
             id: user._id,
@@ -113,6 +117,12 @@ exports.updateProfile = async (req, res) => {
             success: true,
             message: 'Profile updated successfully',
             user: userProfile,
+            conversionInfo: currency ? {
+                oldCurrency: req.body.oldCurrency || 'USD',
+                newCurrency: currency,
+                balanceUSD: user.balanceUSD,
+                balanceInNewCurrency: balanceInPreferredCurrency
+            } : null
         });
     } catch (error) {
         console.error('Update profile error:', error);
@@ -173,11 +183,17 @@ exports.getBalance = async (req, res) => {
             user.currency
         );
 
-        // Optionally get balance in all supported currencies
-        const balances = {
-            [user.currency]: balanceInPreferredCurrency,
-            USD: user.balanceUSD,
-        };
+        // Get all currency conversions
+        const currencies = await getSupportedCurrencies();
+        const balances = {};
+        
+        for (const curr of currencies) {
+            balances[curr.code] = await convertCurrency(
+                user.balanceUSD,
+                'USD',
+                curr.code
+            );
+        }
 
         // Get exchange rate for reference
         const exchangeRate = await getExchangeRate('USD', user.currency);
@@ -188,7 +204,7 @@ exports.getBalance = async (req, res) => {
             balanceUSD: user.balanceUSD,
             currency: user.currency,
             exchangeRate,
-            balances,
+            balances, // All currency conversions
         });
     } catch (error) {
         console.error('Get balance error:', error);
