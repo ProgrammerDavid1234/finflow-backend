@@ -32,6 +32,8 @@ const userSchema = new mongoose.Schema({
         type: Number,
         default: 0,
         min: 0,
+        get: v => parseFloat(v), // Ensure it's always a number
+        set: v => parseFloat(v) || 0 // Ensure it's always a number
     },
     // Display currency (what user wants to see)
     currency: {
@@ -86,6 +88,8 @@ const userSchema = new mongoose.Schema({
     },
 }, {
     timestamps: true,
+    toJSON: { getters: true },
+    toObject: { getters: true }
 });
 
 // Indexes for faster queries
@@ -96,7 +100,7 @@ userSchema.index({ authMethod: 1 });
 // Virtual field for balance in user's preferred currency
 userSchema.virtual('balance').get(function() {
     // This will be calculated dynamically by the controller
-    return this.balanceUSD;
+    return parseFloat(this.balanceUSD);
 });
 
 // Validation: Either email or walletAddress must be present
@@ -104,14 +108,40 @@ userSchema.pre('save', function(next) {
     if (!this.email && !this.walletAddress) {
         next(new Error('Either email or wallet address is required'));
     } else {
+        // Ensure balanceUSD is always a number
+        if (this.balanceUSD !== undefined) {
+            this.balanceUSD = parseFloat(this.balanceUSD) || 0;
+        }
         next();
     }
 });
 
 // Method to get balance in specific currency
 userSchema.methods.getBalanceInCurrency = async function(targetCurrency) {
-    const { convertCurrency } = require('../services/currencyService');
+    const { convertCurrency } = require('../service/currencyService');
     return await convertCurrency(this.balanceUSD, 'USD', targetCurrency);
+};
+
+// Method to add to balance (ensures numeric operation)
+userSchema.methods.addToBalance = async function(amount, currency = 'USD') {
+    const { convertCurrency } = require('../service/currencyService');
+    const amountInUSD = await convertCurrency(parseFloat(amount), currency, 'USD');
+    this.balanceUSD = parseFloat(this.balanceUSD) + parseFloat(amountInUSD);
+    return this.balanceUSD;
+};
+
+// Method to subtract from balance (ensures numeric operation)
+userSchema.methods.subtractFromBalance = async function(amount, currency = 'USD') {
+    const { convertCurrency } = require('../service/currencyService');
+    const amountInUSD = await convertCurrency(parseFloat(amount), currency, 'USD');
+    const newBalance = parseFloat(this.balanceUSD) - parseFloat(amountInUSD);
+    
+    if (newBalance < 0) {
+        throw new Error('Insufficient balance');
+    }
+    
+    this.balanceUSD = newBalance;
+    return this.balanceUSD;
 };
 
 module.exports = mongoose.model('User', userSchema);

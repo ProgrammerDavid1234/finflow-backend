@@ -11,29 +11,34 @@ exports.createTransaction = async (req, res) => {
             return res.status(400).json({ error: 'Type and amount are required' });
         }
 
-        if (amount <= 0) {
-            return res.status(400).json({ error: 'Amount must be positive' });
+        // Parse amount to ensure it's a number
+        const numericAmount = parseFloat(amount);
+        
+        if (isNaN(numericAmount) || numericAmount <= 0) {
+            return res.status(400).json({ error: 'Amount must be a valid positive number' });
         }
 
         const user = await User.findById(req.userId);
         const transactionCurrency = currency || user.currency;
 
         // Convert transaction amount to USD for balance calculation
-        const amountInUSD = await convertCurrency(amount, transactionCurrency, 'USD');
+        const amountInUSD = await convertCurrency(numericAmount, transactionCurrency, 'USD');
 
         // Check balance for send/withdrawal transactions (compare in USD)
         if (['send', 'withdrawal', 'bill'].includes(type)) {
             if (user.balanceUSD < amountInUSD) {
                 return res.status(400).json({ 
                     error: 'Insufficient balance',
-                    required: amount,
+                    required: numericAmount,
                     available: await convertCurrency(user.balanceUSD, 'USD', transactionCurrency),
                     currency: transactionCurrency
                 });
             }
-            user.balanceUSD -= amountInUSD;
+            // Subtract from balance (ensure numeric operation)
+            user.balanceUSD = parseFloat(user.balanceUSD) - parseFloat(amountInUSD);
         } else if (['receive', 'topup'].includes(type)) {
-            user.balanceUSD += amountInUSD;
+            // Add to balance (ensure numeric operation)
+            user.balanceUSD = parseFloat(user.balanceUSD) + parseFloat(amountInUSD);
         }
 
         // Get exchange rate for reference
@@ -42,13 +47,13 @@ exports.createTransaction = async (req, res) => {
         const transaction = new Transaction({
             userId: req.userId,
             type,
-            amount,
+            amount: numericAmount,
             currency: transactionCurrency,
             recipient,
             description,
             balanceAfter: user.balanceUSD,
-            exchangeRate, // Store the rate at time of transaction
-            amountUSD: amountInUSD, // Store USD equivalent
+            exchangeRate,
+            amountUSD: amountInUSD,
         });
 
         await transaction.save();
@@ -123,7 +128,7 @@ exports.getTransactions = async (req, res) => {
             success: true,
             transactions: transactionsWithConversion,
             totalPages: Math.ceil(count / limit),
-            currentPage: page,
+            currentPage: parseInt(page),
             total: count,
         });
     } catch (error) {
@@ -221,9 +226,9 @@ exports.getStatistics = async (req, res) => {
             const amountInUSD = tx.amountUSD || await convertCurrency(tx.amount, tx.currency, 'USD');
 
             if (['receive', 'topup'].includes(tx.type)) {
-                totalIncomeUSD += amountInUSD;
+                totalIncomeUSD += parseFloat(amountInUSD);
             } else if (['send', 'withdrawal', 'bill'].includes(tx.type)) {
-                totalExpenseUSD += amountInUSD;
+                totalExpenseUSD += parseFloat(amountInUSD);
             }
 
             byType[tx.type] = (byType[tx.type] || 0) + 1;
@@ -233,7 +238,7 @@ exports.getStatistics = async (req, res) => {
         for (const tx of previousTransactions) {
             const amountInUSD = tx.amountUSD || await convertCurrency(tx.amount, tx.currency, 'USD');
             if (['send', 'withdrawal', 'bill'].includes(tx.type)) {
-                previousExpenseUSD += amountInUSD;
+                previousExpenseUSD += parseFloat(amountInUSD);
             }
         }
 
@@ -252,7 +257,7 @@ exports.getStatistics = async (req, res) => {
             }
             const amountInUSD = tx.amountUSD || tx.amount;
             if (['send', 'withdrawal', 'bill'].includes(tx.type)) {
-                transactionsByDay[date] += amountInUSD;
+                transactionsByDay[date] += parseFloat(amountInUSD);
             }
         });
 

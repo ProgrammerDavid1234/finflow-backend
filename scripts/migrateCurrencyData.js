@@ -2,9 +2,9 @@
 // Run this script once to migrate existing data to the new currency system
 
 const mongoose = require('mongoose');
-const User = require('../models/User');
-const Transaction = require('../models/Transaction');
-const { convertCurrency } = require('../services/currencyService');
+const User = require('../src/models/User');
+const Transaction = require('../src/models/Transaction');
+const { convertCurrency } = require('../src/service/currencyService');
 require('dotenv').config();
 
 const migrateCurrencyData = async () => {
