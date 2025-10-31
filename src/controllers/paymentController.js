@@ -65,7 +65,8 @@ exports.createTopUpIntent = async (req, res) => {
             {
                 type: 'topup',
                 userEmail: user.email,
-                userName: user.fullName
+                userName: user.fullName,
+                userId: req.userId.toString() // Add userId to metadata for webhook
             }
         );
 
@@ -110,7 +111,7 @@ exports.createTopUpIntent = async (req, res) => {
     }
 };
 
-// Confirm payment and update balance
+// Confirm payment and update balance (can still be called manually but webhook handles it)
 exports.confirmTopUp = async (req, res) => {
     try {
         const { paymentIntentId } = req.body;
@@ -147,10 +148,24 @@ exports.confirmTopUp = async (req, res) => {
 
         // Check if already processed
         if (transaction.status === 'completed') {
+            const user = await User.findById(req.userId);
+            const balanceInPreferredCurrency = await user.getBalanceInCurrency(user.currency);
+            
             return res.json({
                 success: true,
                 message: 'Transaction already processed',
                 alreadyProcessed: true,
+                transaction: {
+                    id: transaction._id,
+                    amount: transaction.amount,
+                    currency: transaction.currency,
+                    amountUSD: transaction.amountUSD,
+                    status: transaction.status,
+                    createdAt: transaction.createdAt,
+                },
+                newBalance: balanceInPreferredCurrency,
+                newBalanceUSD: user.balanceUSD,
+                currency: user.currency,
             });
         }
 
@@ -200,7 +215,7 @@ exports.confirmTopUp = async (req, res) => {
     }
 };
 
-// Get payment status
+// Get payment status (for polling)
 exports.getPaymentStatus = async (req, res) => {
     try {
         const { paymentIntentId } = req.params;
@@ -220,6 +235,27 @@ exports.getPaymentStatus = async (req, res) => {
             transactionHash: paymentIntentId,
         });
 
+        // If payment succeeded and transaction is still pending, auto-complete it
+        if (paymentResult.paymentIntent.status === 'succeeded' && 
+            transaction && 
+            transaction.status === 'pending') {
+            
+            const user = await User.findById(req.userId);
+            
+            if (user) {
+                // Update balance
+                user.balanceUSD = parseFloat(user.balanceUSD) + parseFloat(transaction.amountUSD);
+                await user.save();
+
+                // Update transaction
+                transaction.status = 'completed';
+                transaction.balanceAfter = user.balanceUSD;
+                await transaction.save();
+
+                console.log('Balance auto-updated via status check for user:', user._id);
+            }
+        }
+
         res.json({
             success: true,
             payment: paymentResult.paymentIntent,
@@ -228,6 +264,7 @@ exports.getPaymentStatus = async (req, res) => {
                 status: transaction.status,
                 amount: transaction.amount,
                 currency: transaction.currency,
+                amountUSD: transaction.amountUSD,
             } : null
         });
     } catch (error) {
@@ -286,7 +323,7 @@ exports.getSupportedCurrencies = async (req, res) => {
     }
 };
 
-// Handle Stripe webhook (for production)
+// Handle Stripe webhook (AUTOMATIC BALANCE UPDATE)
 exports.handleWebhook = async (req, res) => {
     try {
         const sig = req.headers['stripe-signature'];
@@ -311,7 +348,7 @@ exports.handleWebhook = async (req, res) => {
                 const paymentIntent = event.data.object;
                 console.log('PaymentIntent succeeded:', paymentIntent.id);
                 
-                // Auto-confirm payment (backup for mobile confirmation)
+                // AUTOMATIC BALANCE UPDATE
                 const transaction = await Transaction.findOne({
                     transactionHash: paymentIntent.id,
                 });
@@ -319,15 +356,24 @@ exports.handleWebhook = async (req, res) => {
                 if (transaction && transaction.status === 'pending') {
                     const user = await User.findById(transaction.userId);
                     if (user) {
-                        user.balanceUSD = parseFloat(user.balanceUSD) + parseFloat(transaction.amountUSD);
+                        // Update balance automatically
+                        const currentBalance = parseFloat(user.balanceUSD);
+                        const topUpAmount = parseFloat(transaction.amountUSD);
+                        user.balanceUSD = currentBalance + topUpAmount;
                         await user.save();
 
+                        // Update transaction status
                         transaction.status = 'completed';
                         transaction.balanceAfter = user.balanceUSD;
+                        transaction.completedAt = new Date();
                         await transaction.save();
                         
-                        console.log('Balance updated via webhook for user:', user._id);
+                        console.log(`✅ Balance AUTOMATICALLY updated via webhook for user ${user._id}: +$${topUpAmount} (New balance: $${user.balanceUSD})`);
                     }
+                } else if (transaction) {
+                    console.log(`Transaction ${paymentIntent.id} already completed`);
+                } else {
+                    console.log(`Transaction not found for payment ${paymentIntent.id}`);
                 }
                 break;
 
@@ -340,9 +386,26 @@ exports.handleWebhook = async (req, res) => {
                     transactionHash: failedPayment.id,
                 });
 
-                if (failedTransaction) {
+                if (failedTransaction && failedTransaction.status === 'pending') {
                     failedTransaction.status = 'failed';
+                    failedTransaction.failureReason = failedPayment.last_payment_error?.message || 'Payment failed';
                     await failedTransaction.save();
+                    console.log(`❌ Transaction ${failedPayment.id} marked as failed`);
+                }
+                break;
+
+            case 'payment_intent.canceled':
+                const canceledPayment = event.data.object;
+                console.log('PaymentIntent canceled:', canceledPayment.id);
+                
+                const canceledTransaction = await Transaction.findOne({
+                    transactionHash: canceledPayment.id,
+                });
+
+                if (canceledTransaction && canceledTransaction.status === 'pending') {
+                    canceledTransaction.status = 'canceled';
+                    await canceledTransaction.save();
+                    console.log(`🚫 Transaction ${canceledPayment.id} marked as canceled`);
                 }
                 break;
 
