@@ -422,3 +422,120 @@ exports.handleWebhook = async (req, res) => {
         });
     }
 };
+// Add this to your paymentController.js
+
+// TEST ENDPOINT: Complete payment in test mode (DEVELOPMENT ONLY)
+exports.testCompletePayment = async (req, res) => {
+    try {
+        if (process.env.NODE_ENV === 'production') {
+            return res.status(403).json({
+                success: false,
+                error: 'This endpoint is only available in development mode'
+            });
+        }
+
+        const { paymentIntentId } = req.body;
+
+        if (!paymentIntentId) {
+            return res.status(400).json({
+                success: false,
+                error: 'Payment intent ID is required'
+            });
+        }
+
+        const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+
+        // Get payment intent
+        let paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+
+        console.log('Current status:', paymentIntent.status);
+
+        // If not completed, confirm it with test payment method
+        if (paymentIntent.status !== 'succeeded') {
+            paymentIntent = await stripe.paymentIntents.confirm(paymentIntentId, {
+                payment_method: 'pm_card_visa', // Test payment method
+            });
+            console.log('Confirmed! New status:', paymentIntent.status);
+        }
+
+        // Now update balance automatically
+        const Transaction = require('../models/Transaction');
+        const User = require('../models/User');
+
+        const transaction = await Transaction.findOne({
+            userId: req.userId,
+            transactionHash: paymentIntentId,
+        });
+
+        if (!transaction) {
+            return res.status(404).json({
+                success: false,
+                error: 'Transaction not found'
+            });
+        }
+
+        if (transaction.status === 'completed') {
+            const user = await User.findById(req.userId);
+            const balanceInPreferredCurrency = await user.getBalanceInCurrency(user.currency);
+            
+            return res.json({
+                success: true,
+                message: 'Payment already completed',
+                alreadyCompleted: true,
+                transaction: {
+                    id: transaction._id,
+                    amount: transaction.amount,
+                    currency: transaction.currency,
+                    status: transaction.status,
+                },
+                balance: balanceInPreferredCurrency,
+                balanceUSD: user.balanceUSD,
+            });
+        }
+
+        // Update balance
+        const user = await User.findById(req.userId);
+        
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                error: 'User not found'
+            });
+        }
+
+        const currentBalance = parseFloat(user.balanceUSD);
+        const topUpAmount = parseFloat(transaction.amountUSD);
+        user.balanceUSD = currentBalance + topUpAmount;
+        await user.save();
+
+        // Update transaction
+        transaction.status = 'completed';
+        transaction.balanceAfter = user.balanceUSD;
+        await transaction.save();
+
+        const balanceInPreferredCurrency = await user.getBalanceInCurrency(user.currency);
+
+        res.json({
+            success: true,
+            message: 'Payment completed successfully (TEST MODE)',
+            transaction: {
+                id: transaction._id,
+                amount: transaction.amount,
+                currency: transaction.currency,
+                amountUSD: transaction.amountUSD,
+                status: transaction.status,
+            },
+            previousBalance: currentBalance,
+            addedAmount: topUpAmount,
+            newBalance: balanceInPreferredCurrency,
+            newBalanceUSD: user.balanceUSD,
+            currency: user.currency,
+        });
+    } catch (error) {
+        console.error('Test complete payment error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message || 'Failed to complete test payment'
+        });
+    }
+};

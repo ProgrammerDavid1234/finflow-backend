@@ -22,4 +22,11 @@ router.get('/status/:paymentIntentId', paymentController.getPaymentStatus);
 // GET /api/payment/currencies - Get supported currencies for payments
 router.get('/currencies', paymentController.getSupportedCurrencies);
 
+router.post('/test-complete', paymentController.testCompletePayment);
+router.post('/test-payment', async (req, res) => {
+    const { amount, currency, userId } = req.body;
+    const result = await paymentService.createPaymentIntent(amount, currency, userId);
+    res.json(result);
+});
 module.exports = router;
+

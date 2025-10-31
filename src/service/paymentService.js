@@ -34,20 +34,20 @@ const createPaymentIntent = async (amount, currency, userId, metadata = {}) => {
         // For USD, EUR, GBP: multiply by 100 for cents
         const amountInCents = Math.round(numericAmount * 100);
 
-        const paymentIntent = await stripe.paymentIntents.create({
-            amount: amountInCents,
-            currency: getStripeCurrency(currency),
-            metadata: {
-                userId: userId.toString(),
-                originalAmount: numericAmount,
-                originalCurrency: currency,
-                ...metadata
-            },
-            // Enable these for production:
-            // automatic_payment_methods: {
-            //     enabled: true,
-            // },
-        });
+const paymentIntent = await stripe.paymentIntents.create({
+  amount: amountInCents,
+  currency: getStripeCurrency(currency),
+  automatic_payment_methods: {
+    enabled: true,
+    allow_redirects: 'never', // 🚫 prevents Stripe from requiring return_url
+  },
+  metadata: {
+    userId: userId.toString(),
+    originalAmount: numericAmount,
+    originalCurrency: currency,
+    ...metadata,
+  },
+});
 
         return {
             success: true,

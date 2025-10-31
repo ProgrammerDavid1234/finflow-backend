@@ -292,7 +292,7 @@ exports.changePassword = async (req, res) => {
             });
         }
 
-        // Hash new password
+        // Hash new passwords
         const salt = await bcrypt.genSalt(10);
         user.password = await bcrypt.hash(newPassword, salt);
 
