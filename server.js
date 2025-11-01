@@ -36,6 +36,8 @@ const paymentRoutes = require('./src/routes/paymentRoutes'); // ✅ NEW
 const exchangeRoutes = require('./src/routes/exchange'); // NEW
 const transferRoutes = require('./src/routes/transfer');
 const paymentRequestRoutes = require('./src/routes/paymentRequest');
+const analyticsRoutes = require('./src/routes/analytics');
+
 // ========== ROUTE REGISTRATION ==========
 app.get('/', (req, res) => {
     res.json({
@@ -59,6 +61,8 @@ app.use('/api/payment', paymentRoutes); // ✅ Payment routes registered
 app.use('/api/exchange', exchangeRoutes); // Exchange routes registered
 app.use('/api/transfer', transferRoutes);
 app.use('/api/payment-request', paymentRequestRoutes);
+app.use('/api/analytics', analyticsRoutes);
+
 // ========== HEALTH CHECK ==========
 app.get('/api/health', (req, res) => {
     res.json({
