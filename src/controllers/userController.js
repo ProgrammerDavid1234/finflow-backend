@@ -11,14 +11,21 @@ exports.getProfile = async (req, res) => {
             return res.status(404).json({ success: false, error: 'User not found' });
         }
 
-        // Convert balance to user's preferred currency
-        const balanceInPreferredCurrency = await user.getBalanceInCurrency(user.currency);
-
         // Get crypto assets
         const cryptoAssets = user.getAllCryptoAssets();
         
-        // Calculate total portfolio value (fiat + crypto)
+        // Calculate total portfolio value in USD (fiat + crypto)
         const totalPortfolioUSD = await user.getTotalPortfolioUSD();
+        
+        // Convert total portfolio to user's preferred currency
+        const totalPortfolioInPreferredCurrency = await convertCurrency(
+            totalPortfolioUSD, 
+            'USD', 
+            user.currency
+        );
+
+        // Also get fiat-only balance in preferred currency for breakdown
+        const fiatOnlyInPreferredCurrency = await user.getBalanceInCurrency(user.currency);
 
         const userProfile = {
             id: user._id,
@@ -26,15 +33,29 @@ exports.getProfile = async (req, res) => {
             fullName: user.fullName,
             phoneNumber: user.phoneNumber,
             profileImage: user.profileImage,
-            balance: balanceInPreferredCurrency, // Balance in user's preferred currency
-            balanceUSD: user.balanceUSD, // Original balance in USD
+            
+            // Main balance now shows TOTAL PORTFOLIO in preferred currency
+            balance: totalPortfolioInPreferredCurrency,
+            
+            // Total portfolio in USD
+            balanceUSD: totalPortfolioUSD,
+            
             currency: user.currency,
             baseCurrency: user.baseCurrency,
             
             // Crypto Assets Information
             cryptoAssets: cryptoAssets,
             hasCryptoAssets: Object.keys(cryptoAssets).length > 0,
-            totalPortfolioUSD: totalPortfolioUSD,
+            
+            // Detailed breakdown
+            portfolio: {
+                totalUSD: totalPortfolioUSD,
+                totalInPreferredCurrency: totalPortfolioInPreferredCurrency,
+                fiatOnlyUSD: user.balanceUSD,
+                fiatOnlyInPreferredCurrency: fiatOnlyInPreferredCurrency,
+                cryptoValueUSD: totalPortfolioUSD - user.balanceUSD,
+                currency: user.currency
+            },
             
             walletAddress: user.walletAddress,
             walletType: user.walletType,
@@ -89,12 +110,21 @@ exports.updateProfile = async (req, res) => {
 
         await user.save();
 
-        // Get balance in new currency for response
-        const balanceInPreferredCurrency = await user.getBalanceInCurrency(user.currency);
-        
         // Get crypto assets
         const cryptoAssets = user.getAllCryptoAssets();
+        
+        // Calculate total portfolio value in USD (fiat + crypto)
         const totalPortfolioUSD = await user.getTotalPortfolioUSD();
+        
+        // Convert total portfolio to user's preferred currency
+        const totalPortfolioInPreferredCurrency = await convertCurrency(
+            totalPortfolioUSD, 
+            'USD', 
+            user.currency
+        );
+
+        // Also get fiat-only balance in preferred currency for breakdown
+        const fiatOnlyInPreferredCurrency = await user.getBalanceInCurrency(user.currency);
 
         const updatedUser = {
             id: user._id,
@@ -102,15 +132,29 @@ exports.updateProfile = async (req, res) => {
             fullName: user.fullName,
             phoneNumber: user.phoneNumber,
             profileImage: user.profileImage,
-            balance: balanceInPreferredCurrency,
-            balanceUSD: user.balanceUSD,
+            
+            // Main balance now shows TOTAL PORTFOLIO in preferred currency
+            balance: totalPortfolioInPreferredCurrency,
+            
+            // Total portfolio in USD
+            balanceUSD: totalPortfolioUSD,
+            
             currency: user.currency,
             baseCurrency: user.baseCurrency,
             
             // Crypto Assets Information
             cryptoAssets: cryptoAssets,
             hasCryptoAssets: Object.keys(cryptoAssets).length > 0,
-            totalPortfolioUSD: totalPortfolioUSD,
+            
+            // Detailed breakdown
+            portfolio: {
+                totalUSD: totalPortfolioUSD,
+                totalInPreferredCurrency: totalPortfolioInPreferredCurrency,
+                fiatOnlyUSD: user.balanceUSD,
+                fiatOnlyInPreferredCurrency: fiatOnlyInPreferredCurrency,
+                cryptoValueUSD: totalPortfolioUSD - user.balanceUSD,
+                currency: user.currency
+            },
             
             walletAddress: user.walletAddress,
             walletType: user.walletType,
@@ -145,24 +189,47 @@ exports.getBalance = async (req, res) => {
             return res.status(404).json({ success: false, error: 'User not found' });
         }
 
-        // Get balance in user's preferred currency
-        const balanceInPreferredCurrency = await user.getBalanceInCurrency(user.currency);
-        
         // Get crypto assets
         const cryptoAssets = user.getAllCryptoAssets();
+        
+        // Calculate total portfolio value in USD (fiat + crypto)
         const totalPortfolioUSD = await user.getTotalPortfolioUSD();
+        
+        // Convert total portfolio to user's preferred currency
+        const totalPortfolioInPreferredCurrency = await convertCurrency(
+            totalPortfolioUSD, 
+            'USD', 
+            user.currency
+        );
+
+        // Also get fiat-only balance in preferred currency for breakdown
+        const fiatOnlyInPreferredCurrency = await user.getBalanceInCurrency(user.currency);
 
         res.json({
             success: true,
-            balance: balanceInPreferredCurrency,
-            balanceUSD: user.balanceUSD,
+            
+            // Main balance now shows TOTAL PORTFOLIO in preferred currency
+            balance: totalPortfolioInPreferredCurrency,
+            
+            // Total portfolio in USD
+            balanceUSD: totalPortfolioUSD,
+            
             currency: user.currency,
             baseCurrency: user.baseCurrency,
             
             // Crypto Assets Information
             cryptoAssets: cryptoAssets,
             hasCryptoAssets: Object.keys(cryptoAssets).length > 0,
-            totalPortfolioUSD: totalPortfolioUSD
+            
+            // Detailed breakdown
+            portfolio: {
+                totalUSD: totalPortfolioUSD,
+                totalInPreferredCurrency: totalPortfolioInPreferredCurrency,
+                fiatOnlyUSD: user.balanceUSD,
+                fiatOnlyInPreferredCurrency: fiatOnlyInPreferredCurrency,
+                cryptoValueUSD: totalPortfolioUSD - user.balanceUSD,
+                currency: user.currency
+            }
         });
     } catch (error) {
         console.error('Get balance error:', error);
