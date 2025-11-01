@@ -14,6 +14,12 @@ exports.getProfile = async (req, res) => {
         // Convert balance to user's preferred currency
         const balanceInPreferredCurrency = await user.getBalanceInCurrency(user.currency);
 
+        // Get crypto assets
+        const cryptoAssets = user.getAllCryptoAssets();
+        
+        // Calculate total portfolio value (fiat + crypto)
+        const totalPortfolioUSD = await user.getTotalPortfolioUSD();
+
         const userProfile = {
             id: user._id,
             email: user.email,
@@ -24,6 +30,12 @@ exports.getProfile = async (req, res) => {
             balanceUSD: user.balanceUSD, // Original balance in USD
             currency: user.currency,
             baseCurrency: user.baseCurrency,
+            
+            // Crypto Assets Information
+            cryptoAssets: cryptoAssets,
+            hasCryptoAssets: Object.keys(cryptoAssets).length > 0,
+            totalPortfolioUSD: totalPortfolioUSD,
+            
             walletAddress: user.walletAddress,
             walletType: user.walletType,
             authMethod: user.authMethod,
@@ -79,6 +91,10 @@ exports.updateProfile = async (req, res) => {
 
         // Get balance in new currency for response
         const balanceInPreferredCurrency = await user.getBalanceInCurrency(user.currency);
+        
+        // Get crypto assets
+        const cryptoAssets = user.getAllCryptoAssets();
+        const totalPortfolioUSD = await user.getTotalPortfolioUSD();
 
         const updatedUser = {
             id: user._id,
@@ -90,6 +106,12 @@ exports.updateProfile = async (req, res) => {
             balanceUSD: user.balanceUSD,
             currency: user.currency,
             baseCurrency: user.baseCurrency,
+            
+            // Crypto Assets Information
+            cryptoAssets: cryptoAssets,
+            hasCryptoAssets: Object.keys(cryptoAssets).length > 0,
+            totalPortfolioUSD: totalPortfolioUSD,
+            
             walletAddress: user.walletAddress,
             walletType: user.walletType,
             authMethod: user.authMethod,
@@ -125,13 +147,22 @@ exports.getBalance = async (req, res) => {
 
         // Get balance in user's preferred currency
         const balanceInPreferredCurrency = await user.getBalanceInCurrency(user.currency);
+        
+        // Get crypto assets
+        const cryptoAssets = user.getAllCryptoAssets();
+        const totalPortfolioUSD = await user.getTotalPortfolioUSD();
 
         res.json({
             success: true,
             balance: balanceInPreferredCurrency,
             balanceUSD: user.balanceUSD,
             currency: user.currency,
-            baseCurrency: user.baseCurrency
+            baseCurrency: user.baseCurrency,
+            
+            // Crypto Assets Information
+            cryptoAssets: cryptoAssets,
+            hasCryptoAssets: Object.keys(cryptoAssets).length > 0,
+            totalPortfolioUSD: totalPortfolioUSD
         });
     } catch (error) {
         console.error('Get balance error:', error);
@@ -292,7 +323,7 @@ exports.changePassword = async (req, res) => {
             });
         }
 
-        // Hash new passwords
+        // Hash new password
         const salt = await bcrypt.genSalt(10);
         user.password = await bcrypt.hash(newPassword, salt);
 
