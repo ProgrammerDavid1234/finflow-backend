@@ -1,3 +1,4 @@
+// src/models/Transaction.js - Updated with transfer metadata
 const mongoose = require('mongoose');
 
 const transactionSchema = new mongoose.Schema({
@@ -61,19 +62,48 @@ const transactionSchema = new mongoose.Schema({
         type: Number,
         default: 0,
     },
+    // ========== NEW: TRANSFER-SPECIFIC METADATA ==========
+    metadata: {
+        // Transfer method used
+        transferMethod: {
+            type: String,
+            enum: ['account', 'phone', 'contact', 'wallet'],
+            default: 'account'
+        },
+        // For linking sender and recipient transactions
+        recipientId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        },
+        senderId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        },
+        // For grouping related transactions
+        transferId: String,
+        // Additional transfer notes
+        notes: String,
+        // IP address for security
+        ipAddress: String,
+        // Device info
+        deviceInfo: String
+    }
 }, {
     timestamps: true,
 });
 
-// Index for faster queries
+// Indexes for faster queries
 transactionSchema.index({ userId: 1, createdAt: -1 });
 transactionSchema.index({ status: 1 });
 transactionSchema.index({ type: 1 });
+transactionSchema.index({ 'metadata.recipientId': 1 });
+transactionSchema.index({ 'metadata.senderId': 1 });
+transactionSchema.index({ 'metadata.transferId': 1 });
 
 // Pre-save hook to calculate amountUSD if not provided
 transactionSchema.pre('save', async function(next) {
     if (!this.amountUSD) {
-        const { convertCurrency } = require('../services/currencyService');
+        const { convertCurrency } = require('../service/currencyService');
         this.amountUSD = await convertCurrency(this.amount, this.currency, 'USD');
     }
     next();
