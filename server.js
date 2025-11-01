@@ -33,6 +33,7 @@ const userRoutes = require('./src/routes/user');
 const transactionRoutes = require('./src/routes/transaction');
 const budgetRoutes = require('./src/routes/budget');
 const paymentRoutes = require('./src/routes/paymentRoutes'); // ✅ NEW
+const exchangeRoutes = require('./src/routes/exchange'); // NEW
 
 // ========== ROUTE REGISTRATION ==========
 app.get('/', (req, res) => {
@@ -54,6 +55,7 @@ app.use('/api/user', userRoutes);
 app.use('/api/transactions', transactionRoutes);
 app.use('/api/budgets', budgetRoutes);
 app.use('/api/payment', paymentRoutes); // ✅ Payment routes registered
+app.use('/api/exchange', exchangeRoutes); // Exchange routes registered
 
 // ========== HEALTH CHECK ==========
 app.get('/api/health', (req, res) => {

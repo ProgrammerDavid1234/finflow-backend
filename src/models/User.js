@@ -1,3 +1,4 @@
+// models/User.js - Updated with Crypto Assets
 const mongoose = require('mongoose');
 
 const userSchema = new mongoose.Schema({
@@ -32,8 +33,8 @@ const userSchema = new mongoose.Schema({
         type: Number,
         default: 0,
         min: 0,
-        get: v => parseFloat(v), // Ensure it's always a number
-        set: v => parseFloat(v) || 0 // Ensure it's always a number
+        get: v => parseFloat(v),
+        set: v => parseFloat(v) || 0
     },
     // Display currency (what user wants to see)
     currency: {
@@ -47,6 +48,15 @@ const userSchema = new mongoose.Schema({
         default: 'USD',
         enum: ['USD', 'EUR', 'GBP', 'NGN', 'BTC', 'ETH'],
     },
+    
+    // ========== NEW: CRYPTO ASSETS ==========
+    cryptoAssets: {
+        type: Map,
+        of: Number,
+        default: new Map(),
+        // Stores: { 'BTC': 0.5, 'ETH': 2.3, 'SOL': 15, 'BNB': 1.2, etc. }
+    },
+    
     isVerified: {
         type: Boolean,
         default: false,
@@ -99,7 +109,6 @@ userSchema.index({ authMethod: 1 });
 
 // Virtual field for balance in user's preferred currency
 userSchema.virtual('balance').get(function() {
-    // This will be calculated dynamically by the controller
     return parseFloat(this.balanceUSD);
 });
 
@@ -142,6 +151,79 @@ userSchema.methods.subtractFromBalance = async function(amount, currency = 'USD'
     
     this.balanceUSD = newBalance;
     return this.balanceUSD;
+};
+
+// ========== NEW: CRYPTO ASSET METHODS ==========
+
+// Get crypto asset balance
+userSchema.methods.getCryptoBalance = function(symbol) {
+    if (!this.cryptoAssets) {
+        this.cryptoAssets = new Map();
+    }
+    return parseFloat(this.cryptoAssets.get(symbol) || 0);
+};
+
+// Add to crypto asset
+userSchema.methods.addCryptoAsset = function(symbol, amount) {
+    if (!this.cryptoAssets) {
+        this.cryptoAssets = new Map();
+    }
+    const currentBalance = this.getCryptoBalance(symbol);
+    const newBalance = parseFloat(currentBalance) + parseFloat(amount);
+    this.cryptoAssets.set(symbol, newBalance);
+    return newBalance;
+};
+
+// Subtract from crypto asset
+userSchema.methods.subtractCryptoAsset = function(symbol, amount) {
+    if (!this.cryptoAssets) {
+        this.cryptoAssets = new Map();
+    }
+    const currentBalance = this.getCryptoBalance(symbol);
+    const newBalance = parseFloat(currentBalance) - parseFloat(amount);
+    
+    if (newBalance < 0) {
+        throw new Error(`Insufficient ${symbol} balance`);
+    }
+    
+    this.cryptoAssets.set(symbol, newBalance);
+    return newBalance;
+};
+
+// Get all crypto assets as object
+userSchema.methods.getAllCryptoAssets = function() {
+    if (!this.cryptoAssets) {
+        return {};
+    }
+    const assets = {};
+    this.cryptoAssets.forEach((value, key) => {
+        if (value > 0) {
+            assets[key] = parseFloat(value);
+        }
+    });
+    return assets;
+};
+
+// Get total portfolio value in USD
+userSchema.methods.getTotalPortfolioUSD = async function() {
+    const { convertCurrencyToCrypto } = require('../service/exchangeService');
+    
+    let totalUSD = parseFloat(this.balanceUSD);
+    
+    if (this.cryptoAssets && this.cryptoAssets.size > 0) {
+        for (const [symbol, amount] of this.cryptoAssets) {
+            if (amount > 0) {
+                try {
+                    const valueInUSD = await convertCurrencyToCrypto(amount, symbol, 'USD');
+                    totalUSD += parseFloat(valueInUSD);
+                } catch (error) {
+                    console.error(`Error converting ${symbol}:`, error);
+                }
+            }
+        }
+    }
+    
+    return parseFloat(totalUSD.toFixed(2));
 };
 
 module.exports = mongoose.model('User', userSchema);
