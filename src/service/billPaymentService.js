@@ -103,8 +103,14 @@ class BillPaymentService {
             throw new Error('User not found');
         }
 
-        if (user.balance < amount) {
-            throw new Error('Insufficient balance');
+        // Convert amount to USD for balance check
+        const { convertCurrency } = require('./currencyService');
+        const amountInUSD = await convertCurrency(amount, currency || user.currency, 'USD');
+
+        // Check balance (use balanceUSD which is the actual field in User model)
+        if (user.balanceUSD < amountInUSD) {
+            const availableInCurrency = await convertCurrency(user.balanceUSD, 'USD', currency || user.currency);
+            throw new Error(`Insufficient balance. Available: ${availableInCurrency.toFixed(2)} ${currency || user.currency}`);
         }
 
         // Create bill payment record
@@ -125,28 +131,49 @@ class BillPaymentService {
             user.balance -= amount;
             await user.save();
 
-            // Create transaction record
-            const transaction = new Transaction({
-                user: userId,
-                type: 'bill_payment',
-                amount: -amount,
-                currency: currency || user.currency,
-                description: `${type} payment - ${provider}`,
-                status: 'completed',
-                metadata: {
-                    billPaymentId: billPayment._id,
-                    provider,
-                    serviceType: type
-                }
-            });
-
-            await transaction.save();
-
             // Simulate provider API call
             const providerResponse = await this.callProviderAPI(type, provider, {
                 amount,
                 ...otherData
             });
+
+            // Get exchange rates for USD conversion
+            const exchangeService = require('./exchangeService');
+            let amountUSD = amount;
+            
+            if (currency && currency !== 'USD') {
+                try {
+                    const rate = await exchangeService.getExchangeRate(currency, 'USD');
+                    amountUSD = amount * rate;
+                } catch (error) {
+                    console.error('Exchange rate error:', error);
+                    // Fallback: use convertCurrency from currencyService
+                    const { convertCurrency } = require('./currencyService');
+                    amountUSD = await convertCurrency(amount, currency, 'USD');
+                }
+            }
+
+            // Create transaction record with proper fields matching Transaction model
+            const transaction = new Transaction({
+                userId: userId,
+                type: 'bill', // Valid enum value from Transaction model
+                amount: amount, // Positive amount
+                amountUSD: amountUSD, // Required field in USD
+                currency: currency || user.currency,
+                description: `${type.charAt(0).toUpperCase() + type.slice(1)} - ${provider}`,
+                status: 'completed',
+                balanceAfter: user.balance,
+                fee: 0,
+                metadata: {
+                    billPaymentId: billPayment._id.toString(),
+                    provider: provider,
+                    serviceType: type,
+                    billType: type,
+                    ...otherData
+                }
+            });
+
+            await transaction.save();
 
             // Update bill payment status
             billPayment.status = 'completed';
