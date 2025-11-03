@@ -127,8 +127,8 @@ class BillPaymentService {
         await billPayment.save();
 
         try {
-            // Deduct from user balance
-            user.balance -= amount;
+            // ✅ FIX: Use subtractFromBalance method instead of direct modification
+            await user.subtractFromBalance(amount, currency || user.currency);
             await user.save();
 
             // Simulate provider API call
@@ -137,22 +137,10 @@ class BillPaymentService {
                 ...otherData
             });
 
-            // Get exchange rates for USD conversion
+            // Get exchange rates for USD conversion (keep for transaction record)
             const exchangeService = require('./exchangeService');
-            let amountUSD = amount;
+            let amountUSD = amountInUSD; // Use the already calculated amountInUSD
             
-            if (currency && currency !== 'USD') {
-                try {
-                    const rate = await exchangeService.getExchangeRate(currency, 'USD');
-                    amountUSD = amount * rate;
-                } catch (error) {
-                    console.error('Exchange rate error:', error);
-                    // Fallback: use convertCurrency from currencyService
-                    const { convertCurrency } = require('./currencyService');
-                    amountUSD = await convertCurrency(amount, currency, 'USD');
-                }
-            }
-
             // Create transaction record with proper fields matching Transaction model
             const transaction = new Transaction({
                 userId: userId,
@@ -162,7 +150,7 @@ class BillPaymentService {
                 currency: currency || user.currency,
                 description: `${type.charAt(0).toUpperCase() + type.slice(1)} - ${provider}`,
                 status: 'completed',
-                balanceAfter: user.balance,
+                balanceAfter: user.balanceUSD,
                 fee: 0,
                 metadata: {
                     billPaymentId: billPayment._id.toString(),
@@ -190,8 +178,8 @@ class BillPaymentService {
             };
 
         } catch (error) {
-            // Revert balance if payment fails
-            user.balance += amount;
+            // ✅ FIX: Revert balance using addToBalance method
+            await user.addToBalance(amount, currency || user.currency);
             await user.save();
 
             billPayment.status = 'failed';
@@ -252,6 +240,7 @@ class BillPaymentService {
 
     // Get bill payment statistics
     static async getPaymentStats(userId) {
+        const mongoose = require('mongoose');
         const stats = await BillPayment.aggregate([
             { $match: { user: mongoose.Types.ObjectId(userId) } },
             {
